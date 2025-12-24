@@ -1,46 +1,155 @@
-const express = require('express');
-const cors = require('cors');
-
-const loginRoutes = require('./login.js');
-const stuidRoutes = require('./stuid.js');
-const teaidRoutes = require('./teaid.js');
-const initSocket = require('./socket.js');
+const express = require("express");
+const cors = require("cors");
+const jwt = require("jsonwebtoken");
+const { MongoClient } = require("mongodb");
+const http = require("http");
+const { Server } = require("socket.io");
 
 const app = express();
+const server = http.createServer(app);
+
 app.use(cors());
 app.use(express.json());
 
-// Register routes
-loginRoutes(app);
-stuidRoutes(app);
-teaidRoutes(app);
+const url = "mongodb://127.0.0.1:27017";
+const SECRET_KEY = "123";
 
-// Signup route directly in main file
-app.post("/signup", async (req, res) => {
-  const { username, password, email } = req.body;
+/* ---------- MONGODB CONNECT (ONLY ONCE) ---------- */
+const client = new MongoClient(url);
+
+async function connectDB() {
   try {
-    const { MongoClient } = require('mongodb');
-    const url = "mongodb://127.0.0.1:27017";
-    const client = new MongoClient(url);
     await client.connect();
+    console.log("MongoDB Connected");
+  } catch (err) {
+    console.error("MongoDB Connection Failed", err);
+  }
+}
+connectDB();
 
+/* ---------------- SOCKET.IO ---------------- */
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
+
+io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
+
+  socket.on("sendMessage", (data) => {
+    socket.broadcast.emit("receiveMessage", data);
+  });
+
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
+  });
+});
+
+/* ---------------- REST APIs ---------------- */
+
+app.post("/login", async (req, res) => {
+  const { username, password } = req.body;
+
+  try {
     const db = client.db("mernpro");
-    const collection = db.collection("signupdata");
 
-    await collection.insertOne({ username, password, email });
-    res.json({ message: "Signup successful" });
+    const user = await db.collection("signupdata").findOne({
+      username: username.trim(),
+      password: password.trim(),
+    });
 
-    await client.close();
-  } catch (error) {
-    console.error(error);
-    res.status(500).send("Error signing up");
+    if (!user) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const token = jwt.sign({ username: user.username }, SECRET_KEY);
+
+    res.json({
+      token1: token,
+      username1: user.username,
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
   }
 });
 
-// Start server
-const server = app.listen(5000, () => {
-  console.log("Server running on port 5000");
+app.post("/signup", async (req, res) => {
+  const { username, password, email } = req.body;
+
+  try {
+    const db = client.db("mernpro");
+
+    await db.collection("signupdata").insertOne({
+      username: username.trim(),
+      password: password.trim(),
+      email,
+    });
+
+    res.json({ message: "Signup successful" });
+
+  } catch (err) {
+    res.status(500).json({ message: "Error signing up" });
+  }
 });
 
-// Initialize socket.io
+app.post("/verify-class", async (req, res) => {
+  const { classId } = req.body;
 
+  try {
+    const db = client.db("mernpro");
+
+    const classFound = await db
+      .collection("classid")
+      .findOne({ classId: classId.trim() });
+
+    if (!classFound) {
+      return res.status(404).json({
+        status: "failed",
+        message: "Invalid Class ID",
+      });
+    }
+
+    const token = jwt.sign({}, SECRET_KEY);
+
+    res.json({
+      studentprogress: "successful",
+      token3:token,
+      status: "successful",
+    });
+
+  } catch (err) {
+    res.status(500).json({ message: "Error verifying class" });
+  }
+});
+
+app.post("/create-class", async (req, res) => {
+  const { classId } = req.body;
+
+  try {
+    const db = client.db("mernpro");
+
+    await db.collection("classid").insertOne({
+      classId: classId.trim(),
+    });
+
+    const token = jwt.sign({}, SECRET_KEY);
+
+    res.json({
+      status: "successful",
+      teacherprogress: "successful",
+      token2: token,
+    });
+
+  } catch (err) {
+    res.status(500).json({ status: "failed" });
+  }
+});
+
+/* ---------------- SERVER START ---------------- */
+server.listen(5000, () => {
+  console.log("Server running on port 5000");
+});
